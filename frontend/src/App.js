@@ -204,13 +204,14 @@ function App() {
   // Parse CSV data
   const parseCSV = (csvText) => {
     // Split into lines and filter out empty lines
-    const lines = csvText.split('\n').filter(line => line.trim() !== '');
+    let lines = csvText.split('\n').filter(line => line.trim() !== '');
     if (lines.length === 0) return [];
-    
-    console.log(`Found ${lines.length} lines in CSV data`);
-    
-    // For this specific CSV format, we don't have headers
-    // Each row represents a patient with ecg data
+
+    // Remove header row (column names) before parsing patients
+    lines.shift();
+    console.log(`Found ${lines.length} data lines in CSV (header excluded)`);
+
+    // Each row now represents a patient with ECG data
     return lines.map((line, index) => {
       const values = line.split(',');
       

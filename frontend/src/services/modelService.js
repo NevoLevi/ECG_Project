@@ -5,7 +5,8 @@ class ECGModelService {
     this.model = null;
     this.scaler = null;
     this.isLoaded = false;
-    this.baseUrl = 'http://localhost:5000';
+    // Use relative paths so models load from the frontend server
+    this.baseUrl = '';
   }
 
   async loadModel() {
