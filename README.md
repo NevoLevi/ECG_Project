@@ -86,8 +86,8 @@ Each patient has 18,700 ECG values (100 sequences × 187 values each), represent
 
 ## Patient Categories
 
-- **220 Normal Patients**: Only contain normal ECG sequences (classification 0)
-- **80 Abnormal Patients**: Mostly normal with some abnormal sequences (classifications 1-3) in the first 20 sequences
+- **290 Normal Patients**: Only contain normal ECG sequences (classification 0)
+- **10 Mixed Patients**: Mostly normal with some abnormal sequences (classifications 1-3) randomly inserted within the first 50 sequences
 
 ## Technology Stack
 
