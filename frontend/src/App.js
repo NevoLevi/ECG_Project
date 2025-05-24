@@ -371,10 +371,34 @@ function App() {
         if (gridCanvasRef.current) ctx.drawImage(gridCanvasRef.current, 0, 0);
         else { ctx.fillStyle = '#FFFFFF'; ctx.fillRect(0, 0, width, height); }
 
-        // Draw ECG path
+        // Draw amplitude axis labels and midline
+        ctx.save();
+        ctx.fillStyle = '#4B5563'; // gray labels
+        ctx.font = '12px sans-serif';
+        ctx.textAlign = 'left';
+        // 1.0 at top
+        ctx.textBaseline = 'top';
+        ctx.fillText('1.0', 4, 4);
+        // 0.5 in middle
+        ctx.textBaseline = 'middle';
+        ctx.fillText('0.5', 4, height / 2);
+        // 0.0 at bottom
+        ctx.textBaseline = 'bottom';
+        ctx.fillText('0.0', 4, height - 4);
+        ctx.restore();
+        // Draw horizontal dashed midline
+        ctx.save();
+        ctx.strokeStyle = '#6B7280';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(0, height / 2);
+        ctx.lineTo(width, height / 2);
+        ctx.stroke();
+        ctx.restore();
+
+        // Draw ECG path (map amplitude 0–1 to full height)
         const xStep = width / windowData.length;
-        const yCenter = height / 2;
-        const yScale = height * 0.4;
         const grad = ctx.createLinearGradient(0, 0, width, 0);
         grad.addColorStop(0, '#93C5FD');
         grad.addColorStop(0.7, '#3B82F6');
@@ -385,30 +409,39 @@ function App() {
         ctx.beginPath();
         windowData.forEach((v, i) => {
           const x = i * xStep;
-          const y = yCenter - v * yScale;
+          // v=1 at top (y=0), v=0 at bottom (y=height)
+          const y = height * (1 - v);
           if (i === 0) ctx.moveTo(x, y);
           else {
             const px = (i - 1) * xStep;
-            const py = yCenter - windowData[i - 1] * yScale;
+            const py = height * (1 - windowData[i - 1]);
             ctx.quadraticCurveTo(px, py, (px + x) / 2, (py + y) / 2);
           }
         });
         ctx.stroke();
+
+        // Draw red striped "current moment" indicator at 75% of canvas
+        ctx.save();
+        ctx.strokeStyle = '#EF4444';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([4, 4]);
+        const markerX = width * 0.75;
+        ctx.beginPath();
+        ctx.moveTo(markerX, 0);
+        ctx.lineTo(markerX, height);
+        ctx.stroke();
+        ctx.restore();
       };
 
-      // Continuous scroll without looping: cap start index to end of data
+      // Continuous scroll with wrap-around
       let startTime = null;
-      const displayLength = 375; // same window length used by extractECGDisplayWindow
-      const maxStart = Math.max(0, patient.ecgData.length - displayLength);
       const animate = (timestamp) => {
         if (!startTime) startTime = timestamp;
         const elapsed = timestamp - startTime;
-        // samples per second = 125, so advance that many samples per second
         const pos = Math.floor((elapsed / 1000) * 125);
-        const startIdx = Math.min(pos, maxStart);
+        const startIdx = pos % patient.ecgData.length;
         drawFrame(startIdx);
-        // continue animation until we reach the end of the data
-        if (monitoring && pos < maxStart) {
+        if (monitoring) {
           animationRef.current = requestAnimationFrame(animate);
         }
       };
@@ -700,27 +733,15 @@ function App() {
                   
                   {/* ECG Wave */}                  
                   <div className="bg-gray-50 p-4 rounded-lg">                    
-                    <h3 className="text-sm font-medium text-gray-700 mb-2">                      
-                      Live ECG (Sliding 3-second window)                       
-                      <span className="text-xs text-gray-500 ml-2">                        
-                        Samples {currentPositions[selectedPatient.id] || 0} - {selectedPatient.ecgData && selectedPatient.ecgData.length > 0 ? ((currentPositions[selectedPatient.id] || 0) + 375) % selectedPatient.ecgData.length : 0}                      
-                      </span>                    
-                    </h3>                    
-                    <div className="relative">                      
-                      <div className="absolute top-0 left-0 right-0 flex justify-between text-xs text-gray-500 px-2 z-10">                        
-                        <span>⬅ Older data (fading out)</span>                        
-                        <span>Newer data (sliding in) ➡</span>                      
-                      </div>                      
+                    <h3 className="text-sm font-medium text-gray-700 mb-2">
+                      Live ECG (Sliding 3-second window)
+                    </h3>
+                    <div className="relative">
                       <ECGWave                         
                         patient={selectedPatient}                         
                         monitoring={isMonitoring}                         
                         prediction={patientPredictions[selectedPatient.id]}                      />                    
-                    </div>                    
-                    <p className="text-xs text-gray-500 mt-2 text-center">
-                      {patientPredictions[selectedPatient.id] ?                         
-                        `Last updated: ${patientPredictions[selectedPatient.id].timestamp} | Window advances by 125 samples every second` :                         
-                        'Waiting for data... Each second, 125 new samples replace the oldest 125 samples'}                    
-                    </p>                  
+                    </div>
                   </div>
                 </div>
               ) : (
