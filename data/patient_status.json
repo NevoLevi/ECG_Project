@@ -1,0 +1,68 @@
+{
+  "Patient_006": {
+    "status": "abnormal",
+    "last_abnormal_detection": {
+      "timestamp": "2:47:07",
+      "position": 0,
+      "confidence": 0.5
+    },
+    "doctor_checked": false,
+    "last_check_time": null,
+    "notes": ""
+  },
+  "Patient_013": {
+    "status": "abnormal",
+    "last_abnormal_detection": {
+      "timestamp": "2:47:09",
+      "position": 0,
+      "confidence": 0.5
+    },
+    "doctor_checked": false,
+    "last_check_time": null,
+    "notes": ""
+  },
+  "Patient_047": {
+    "status": "abnormal",
+    "last_abnormal_detection": {
+      "timestamp": "2:47:08",
+      "position": 0,
+      "confidence": 0.5
+    },
+    "doctor_checked": false,
+    "last_check_time": null,
+    "notes": ""
+  },
+  "Patient_020": {
+    "status": "abnormal",
+    "last_abnormal_detection": {
+      "timestamp": "2:47:08",
+      "position": 0,
+      "confidence": 0.5
+    },
+    "doctor_checked": false,
+    "last_check_time": null,
+    "notes": ""
+  },
+  "Patient_005": {
+    "status": "abnormal",
+    "last_abnormal_detection": {
+      "timestamp": "2:47:08",
+      "position": 0,
+      "confidence": 0.5
+    },
+    "doctor_checked": false,
+    "last_check_time": null,
+    "notes": ""
+  },
+  "Patient_010": {
+    "status": "abnormal",
+    "last_abnormal_detection": {
+      "timestamp": "2:47:08",
+      "position": 0,
+      "confidence": 0.5
+    },
+    "doctor_checked": false,
+    "last_check_time": null,
+    "notes": ""
+  }
+}
