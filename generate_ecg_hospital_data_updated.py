@@ -24,7 +24,7 @@ def create_ecg_hospital_data():
     
     # Parameters
     total_patients = 300
-    normal_only_patients = 220
+    normal_only_patients = 290
     mixed_patients = total_patients - normal_only_patients
     sequences_per_patient = 100
     
@@ -32,7 +32,7 @@ def create_ecg_hospital_data():
     all_patients = []
     patient_info = []
     
-    # Generate 220 patients with only normal sequences
+    # Generate 290 patients with only normal sequences
     print(f"Generating {normal_only_patients} patients with only normal sequences...")
     for patient_id in range(1, normal_only_patients + 1):
         # Randomly select 100 normal sequences
@@ -55,15 +55,15 @@ def create_ecg_hospital_data():
         if patient_id % 50 == 0:
             print(f"  Completed {patient_id}/{normal_only_patients} normal patients")
     
-    # Generate 80 patients with mostly normal but some abnormal sequences
+    # Generate 10 patients with mostly normal but some abnormal sequences
     print(f"Generating {mixed_patients} patients with mixed sequences...")
     for patient_id in range(normal_only_patients + 1, total_patients + 1):
-        # Decide how many abnormal sequences to include (1-4 abnormal sequences)
-        num_abnormal = random.randint(1, 4)
+        # Decide how many abnormal sequences to include (1-3 abnormal sequences)
+        num_abnormal = random.randint(1, 3)
         num_normal = sequences_per_patient - num_abnormal
         
-        # Choose positions for abnormal sequences (within first 20 positions)
-        abnormal_positions = random.sample(range(20), num_abnormal)
+        # Choose positions for abnormal sequences (within first 50 positions)
+        abnormal_positions = random.sample(range(50), num_abnormal)
         abnormal_positions.sort()
         
         # Select normal sequences
