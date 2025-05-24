@@ -35,10 +35,11 @@ function App() {
   const [doctorNotes, setDoctorNotes] = useState('');
   const [patientToCheck, setPatientToCheck] = useState(null);
   const [showFileSelector, setShowFileSelector] = useState(false);
-  
+
   const intervalRefs = useRef({});
   const positionRefs = useRef({});
   const fileInputRef = useRef(null);
+  const intervalsRef = useRef({});
 
   // Add alert helper function
   const addAlert = useCallback((message, type = 'info') => {
@@ -315,239 +316,124 @@ function App() {
     return patient.ecgData.slice(startIdx, endIdx);
   };
 
-  // Extract ECG window for prediction (187 samples)
-  const extractECGPredictionWindow = (patient, position) => {
-    if (!patient || !patient.ecgData || patient.ecgData.length === 0) return [];
-    
-    const windowSize = 187; // 1.496 seconds at 125 Hz
-    const startIdx = position;
-    const endIdx = startIdx + windowSize;
-    
-    if (endIdx > patient.ecgData.length) {
-      // Loop back to beginning if we reach the end
-      const remaining = endIdx - patient.ecgData.length;
-      return [
-        ...patient.ecgData.slice(startIdx),
-        ...patient.ecgData.slice(0, remaining)
-      ];
-    }
-    
-    return patient.ecgData.slice(startIdx, endIdx);
-  };
-
   // Start monitoring
   const handleStartMonitoring = async () => {
-    if (!modelLoaded || !hospitalData) {
+    if (!modelLoaded || !patients || !Array.isArray(patients) || patients.length === 0) {
       addAlert('❌ Please load model and hospital data first', 'error');
       return;
     }
-
     setIsMonitoring(true);
     addAlert('🚀 Starting patient monitoring...', 'info');
-
-    // Start monitoring intervals for each patient
-    patients.forEach(patient => {
-      // Avoid duplicate intervals
-      if (intervalRefs.current[patient.id]) {
-        clearInterval(intervalRefs.current[patient.id]);
-      }
-      
-      // Initialize position if not already set
-      if (!currentPositions[patient.id] && currentPositions[patient.id] !== 0) {
-        setCurrentPositions(prev => ({
-          ...prev,
-          [patient.id]: 0
-        }));
-      }
-      
-      // Initialize ref position for patient to match state
-      positionRefs.current[patient.id] = currentPositions[patient.id] || 0;
-      
-      // Update monitoring interval to include prediction and sliding window update
-      intervalRefs.current[patient.id] = setInterval(async () => {
-        try {
-          const currentPos = positionRefs.current[patient.id] || 0;
-          // Prediction window (centered 187 samples within 375)
-          const offset = Math.floor((375 - 187) / 2);
-          const startIdx = (currentPos + offset) % patient.ecgData.length;
-          const predictionWindow = extractECGPredictionWindow(patient, startIdx);
-          if (predictionWindow.length === 187) {
-            const prediction = await modelService.predict(predictionWindow);
-            setPatientPredictions(prev => {
-              const newPrediction = { class: prediction.class, confidence: prediction.confidence, timestamp: new Date().toLocaleTimeString(), classInfo: ECG_CLASSES[prediction.class] || ECG_CLASSES[0] };
-              const currentStatus = patientStatuses[patient.id] || 'NORMAL';
-              if ((newPrediction.classInfo.severity === 'high' || newPrediction.classInfo.severity === 'medium') && currentStatus === 'NORMAL' && prediction.confidence > 0.7) {
-                updatePatientStatus(patient.id, 'NEEDS_CHECK');
-                addAlert(`🚨 Alert: ${patient.name} - ${newPrediction.classInfo.name} detected (${(prediction.confidence * 100).toFixed(1)}%)`, 'error');
-              }
-              return { ...prev, [patient.id]: newPrediction };
-            });
-          }
-          // Advance position by 125 samples (1 second)
-          const newPosition = (currentPos + 125) % patient.ecgData.length;
-          positionRefs.current[patient.id] = newPosition;
-          setCurrentPositions({ ...positionRefs.current });
-          console.log(`📊 Position state update for ${patient.id}: ${currentPos} -> ${newPosition}`);
-          console.log(`🔄 Sliding window for ${patient.id}: position ${currentPos} -> ${newPosition} (window: ${newPosition}-${(newPosition + 375) % patient.ecgData.length})`);
-        } catch (error) {
-          console.error(`Prediction error for patient ${patient.id}:`, error);
-        }
-      }, 1000);
-    });
   };
 
   // Stop monitoring
-  const handleStopMonitoring = () => {
+  const handleStopMonitoring = async () => {
     setIsMonitoring(false);
-    
-    // Clear all intervals
-    Object.values(intervalRefs.current).forEach(intervalId => {
-      clearInterval(intervalId);
-    });
-    intervalRefs.current = {};
-    
-    addAlert('⏹️ Monitoring stopped', 'info');
+    addAlert('🛑 Stopping patient monitoring...', 'info');
   };
 
-  // ECG Wave Component with enhanced sliding window effect
-  const ECGWave = ({ patient, position, prediction }) => {
+  // ECG Wave Component with smooth sliding animation
+  const ECGWave = React.memo(({ patient, monitoring, prediction }) => {
     const canvasRef = useRef(null);
-    const prevPositionRef = useRef(position);
-    
+    const animationRef = useRef(null);
+    const gridCanvasRef = useRef(null);
+
+    // Cache static grid background
     useEffect(() => {
-      if (!canvasRef.current || !patient || !patient.ecgData || patient.ecgData.length === 0) return;
-      
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const { width, height } = canvas;
+      const gridCanvas = document.createElement('canvas');
+      gridCanvas.width = width;
+      gridCanvas.height = height;
+      const gctx = gridCanvas.getContext('2d');
+      gctx.fillStyle = '#FFFFFF'; gctx.fillRect(0, 0, width, height);
+      gctx.strokeStyle = '#F3F4F6'; gctx.lineWidth = 0.5;
+      for (let x = 0; x < width; x += 25) { gctx.beginPath(); gctx.moveTo(x, 0); gctx.lineTo(x, height); gctx.stroke(); }
+      for (let y = 0; y < height; y += 25) { gctx.beginPath(); gctx.moveTo(0, y); gctx.lineTo(width, y); gctx.stroke(); }
+      gridCanvasRef.current = gridCanvas;
+    }, []);
+
+    useEffect(() => {
+      if (!canvasRef.current || !patient || !patient.ecgData?.length) return;
       const canvas = canvasRef.current;
       const ctx = canvas.getContext('2d');
-      const width = canvas.width;
-      const height = canvas.height;
-      
-      // Clear canvas completely and force redraw
-      ctx.clearRect(0, 0, width, height);
-      ctx.save();
-      
-      // Get ECG window for display (375 samples = 3 seconds)
-      const ecgWindow = extractECGDisplayWindow(patient, position);
-      
-      if (ecgWindow.length === 0) return;
-      
-      // Determine if we've moved to a new position (sliding happened)
-      const hasSlid = position !== prevPositionRef.current;
-      if (hasSlid) {
-        console.log(`🔄 ECG sliding: ${patient.id} position ${prevPositionRef.current} -> ${position}`);
-      }
-      prevPositionRef.current = position;
-      
-      // Draw background
-      ctx.fillStyle = '#FFFFFF';
-      ctx.fillRect(0, 0, width, height);
-      
-      // Draw grid
-      ctx.strokeStyle = '#E5E7EB';
-      ctx.lineWidth = 0.5;
-      for (let i = 0; i < width; i += 25) {
+      const { width, height } = canvas;
+
+      // Draw one sliding window frame
+      const drawFrame = (pos) => {
+        const ecgWindow = extractECGDisplayWindow(patient, pos);
+        const maxPoints = 200;
+        const factor = Math.max(1, Math.floor(ecgWindow.length / maxPoints));
+        const windowData = ecgWindow.filter((_, i) => i % factor === 0);
+
+        // Draw grid
+        if (gridCanvasRef.current) ctx.drawImage(gridCanvasRef.current, 0, 0);
+        else { ctx.fillStyle = '#FFFFFF'; ctx.fillRect(0, 0, width, height); }
+
+        // Draw ECG path
+        const xStep = width / windowData.length;
+        const yCenter = height / 2;
+        const yScale = height * 0.4;
+        const grad = ctx.createLinearGradient(0, 0, width, 0);
+        grad.addColorStop(0, '#93C5FD');
+        grad.addColorStop(0.7, '#3B82F6');
+        grad.addColorStop(1, '#1D4ED8');
+        ctx.strokeStyle = grad;
+        ctx.lineWidth = 2.5;
+        ctx.lineCap = 'round';
         ctx.beginPath();
-        ctx.moveTo(i, 0);
-        ctx.lineTo(i, height);
-        ctx.stroke();
-      }
-      for (let i = 0; i < height; i += 25) {
-        ctx.beginPath();
-        ctx.moveTo(0, i);
-        ctx.lineTo(width, i);
-        ctx.stroke();
-      }
-      
-      const xStep = width / ecgWindow.length;
-      const yCenter = height / 2;
-      const yScale = height * 0.4;
-      
-      // Draw the complete ECG trace with sliding window visualization
-      ctx.strokeStyle = prediction?.classInfo?.color || '#3B82F6';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      
-      for (let i = 0; i < ecgWindow.length; i++) {
-        const x = i * xStep;
-        const y = yCenter - (ecgWindow[i] * yScale);
-        
-        if (i === 0) {
-          ctx.moveTo(x, y);
-        } else {
-          ctx.lineTo(x, y);
-        }
-      }
-      ctx.stroke();
-      
-      // Add sliding window indicator
-      if (hasSlid) {
-        // Highlight the "new" section that just slid in (last 125 samples)
-        ctx.strokeStyle = '#10B981';
-        ctx.lineWidth = 3;
-        ctx.globalAlpha = 0.7;
-        
-        const newDataStart = Math.floor(250 * xStep);
-        ctx.beginPath();
-        for (let i = 250; i < ecgWindow.length; i++) {
+        windowData.forEach((v, i) => {
           const x = i * xStep;
-          const y = yCenter - (ecgWindow[i] * yScale);
-          
-          if (i === 250) {
-            ctx.moveTo(x, y);
-          } else {
-            ctx.lineTo(x, y);
+          const y = yCenter - v * yScale;
+          if (i === 0) ctx.moveTo(x, y);
+          else {
+            const px = (i - 1) * xStep;
+            const py = yCenter - windowData[i - 1] * yScale;
+            ctx.quadraticCurveTo(px, py, (px + x) / 2, (py + y) / 2);
           }
-        }
+        });
         ctx.stroke();
-        ctx.globalAlpha = 1.0;
-        
-        // Add "NEW DATA" indicator
-        ctx.fillStyle = '#10B981';
-        ctx.font = 'bold 14px Arial';
-        ctx.textAlign = 'center';
-        ctx.fillText('NEW DATA ➤', width - 80, 25);
+      };
+
+      // Continuous scroll without looping: cap start index to end of data
+      let startTime = null;
+      const displayLength = 375; // same window length used by extractECGDisplayWindow
+      const maxStart = Math.max(0, patient.ecgData.length - displayLength);
+      const animate = (timestamp) => {
+        if (!startTime) startTime = timestamp;
+        const elapsed = timestamp - startTime;
+        // samples per second = 125, so advance that many samples per second
+        const pos = Math.floor((elapsed / 1000) * 125);
+        const startIdx = Math.min(pos, maxStart);
+        drawFrame(startIdx);
+        // continue animation until we reach the end of the data
+        if (monitoring && pos < maxStart) {
+          animationRef.current = requestAnimationFrame(animate);
+        }
+      };
+
+      if (monitoring) {
+        startTime = null;
+        animationRef.current = requestAnimationFrame(animate);
+      } else {
+        // static initial frame
+        drawFrame(0);
       }
-      
-      // Add separator line between old and new data
-      ctx.strokeStyle = '#EF4444';
-      ctx.lineWidth = 2;
-      ctx.setLineDash([5, 5]);
-      const separatorX = Math.floor(250 * xStep);
-      ctx.beginPath();
-      ctx.moveTo(separatorX, 0);
-      ctx.lineTo(separatorX, height);
-      ctx.stroke();
-      ctx.setLineDash([]);
-      
-      // Add position and timing info
-      ctx.fillStyle = '#374151';
-      ctx.font = '10px Arial';
-      ctx.textAlign = 'left';
-      ctx.fillText(`Position: ${position}`, 5, 15);
-      ctx.fillText(`Window: ${position}-${position + ecgWindow.length}`, 5, 30);
-      
-      ctx.textAlign = 'right';
-      ctx.fillText(`Time: ${new Date().toLocaleTimeString()}`, width - 5, 15);
-      
-      // Add sections labels
-      ctx.fillStyle = '#6B7280';
-      ctx.font = '12px Arial';
-      ctx.textAlign = 'center';
-      ctx.fillText('Older Data', separatorX / 2, height - 10);
-      ctx.fillText('Newer Data', separatorX + (width - separatorX) / 2, height - 10);
-      
-      ctx.restore();
-    }, [patient, position, prediction]);
-    
+
+      return () => { if (animationRef.current) cancelAnimationFrame(animationRef.current); };
+    }, [patient, monitoring]);
+
     return (
-      <canvas 
-        ref={canvasRef} 
-        width={600} 
+      <canvas
+        ref={canvasRef}
+        width={600}
         height={200}
         className="border-2 border-gray-300 rounded-lg bg-white shadow-sm"
+        style={{ display: 'block' }}
       />
     );
-  };
+  });
 
   // Get status display for patient
   const getPatientStatusDisplay = (patientId) => {
@@ -685,9 +571,9 @@ function App() {
               Model: {modelLoaded ? 'Ready' : 'Not Loaded'}
             </span>
             <span className={`px-3 py-1 rounded-full text-sm ${
-              hospitalData ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'
+              hospitalData && patients.length > 0 ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'
             }`}>
-              Data: {hospitalData ? `${patients.length} Patients` : 'Not Loaded'}
+              Data: {hospitalData && patients.length > 0 ? `${patients.length} Patients` : 'Not Loaded'}
             </span>
             <span className={`px-3 py-1 rounded-full text-sm ${
               isMonitoring ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-600'
@@ -812,7 +698,30 @@ function App() {
                     </div>
                   </div>
                   
-                  {/* ECG Wave */}                  <div className="bg-gray-50 p-4 rounded-lg">                    <h3 className="text-sm font-medium text-gray-700 mb-2">                      Live ECG (Sliding 3-second window)                       <span className="text-xs text-gray-500 ml-2">                        Samples {currentPositions[selectedPatient.id] || 0} - {((currentPositions[selectedPatient.id] || 0) + 375) % selectedPatient.ecgData.length}                      </span>                    </h3>                    <div className="relative">                      <div className="absolute top-0 left-0 right-0 flex justify-between text-xs text-gray-500 px-2 z-10">                        <span>⬅ Older data (fading out)</span>                        <span>Newer data (sliding in) ➡</span>                      </div>                      <ECGWave                         patient={selectedPatient}                         position={currentPositions[selectedPatient.id] || 0}                         prediction={patientPredictions[selectedPatient.id]}                      />                    </div>                    <p className="text-xs text-gray-500 mt-2 text-center">                      {patientPredictions[selectedPatient.id] ?                         `Last updated: ${patientPredictions[selectedPatient.id].timestamp} | Window advances by 125 samples every second` :                         'Waiting for data... Each second, 125 new samples replace the oldest 125 samples'}                    </p>                  </div>
+                  {/* ECG Wave */}                  
+                  <div className="bg-gray-50 p-4 rounded-lg">                    
+                    <h3 className="text-sm font-medium text-gray-700 mb-2">                      
+                      Live ECG (Sliding 3-second window)                       
+                      <span className="text-xs text-gray-500 ml-2">                        
+                        Samples {currentPositions[selectedPatient.id] || 0} - {selectedPatient.ecgData && selectedPatient.ecgData.length > 0 ? ((currentPositions[selectedPatient.id] || 0) + 375) % selectedPatient.ecgData.length : 0}                      
+                      </span>                    
+                    </h3>                    
+                    <div className="relative">                      
+                      <div className="absolute top-0 left-0 right-0 flex justify-between text-xs text-gray-500 px-2 z-10">                        
+                        <span>⬅ Older data (fading out)</span>                        
+                        <span>Newer data (sliding in) ➡</span>                      
+                      </div>                      
+                      <ECGWave                         
+                        patient={selectedPatient}                         
+                        monitoring={isMonitoring}                         
+                        prediction={patientPredictions[selectedPatient.id]}                      />                    
+                    </div>                    
+                    <p className="text-xs text-gray-500 mt-2 text-center">
+                      {patientPredictions[selectedPatient.id] ?                         
+                        `Last updated: ${patientPredictions[selectedPatient.id].timestamp} | Window advances by 125 samples every second` :                         
+                        'Waiting for data... Each second, 125 new samples replace the oldest 125 samples'}                    
+                    </p>                  
+                  </div>
                 </div>
               ) : (
                 <div className="text-center py-12 text-gray-500">
