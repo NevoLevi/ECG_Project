@@ -3,6 +3,15 @@ import modelService from './services/modelService';
 import monitoringService from './services/monitoringService';
 import './App.css';
 
+// Classification full names mapping
+const CLASSIFICATION_NAMES = {
+  'S': 'Supraventricular Premature Beat',
+  'V': 'Premature Ventricular Contraction',
+  'F': 'Fusion of Ventricular and Normal Beat',
+  'Q': 'Unclassifiable Beat',
+  'N': 'Normal'
+};
+
 // These constants are kept for potential future use
 // const ECG_CLASSES = {
 //   0: { name: 'Normal', color: '#10B981', severity: 'low' },
@@ -92,10 +101,10 @@ const AbnormalECGWindow = React.memo(({ patientId, windowIndex, classification, 
     
     ctx.stroke();
     
-    // Add classification label
+    // Add classification label with full name
     ctx.fillStyle = classificationColors[classification] || '#3B82F6';
     ctx.font = 'bold 14px sans-serif';
-    ctx.fillText(`${classification}-Type`, 10, 20);
+    ctx.fillText(CLASSIFICATION_NAMES[classification] || `${classification}-Type`, 10, 20);
     
   }, [patientId, windowIndex, classification, getECGWindowData]);
   
@@ -171,6 +180,44 @@ function App() {
     };
     setAlerts(prev => [alert, ...prev.slice(0, 9)]); // Keep only last 10 alerts
   }, []);
+
+  // Handle patient status actions
+  const handlePatientAction = (patientId, action) => {
+    setPatientStatuses(prev => {
+      const newStatuses = { ...prev };
+      const patient = newStatuses[patientId];
+      
+      if (!patient) return prev;
+      
+      switch (action) {
+        case 'classify_normal':
+          newStatuses[patientId] = {
+            ...patient,
+            status: 'NORMAL',
+            classification: 'N',
+            abnormalWindows: [],
+            detectedAt: null,
+            windowSpan: null
+          };
+          addAlert(`✅ Patient ${patientId.toString().padStart(3, '0')} classified as Normal`, 'success');
+          break;
+        case 'confirm':
+          addAlert(`✅ Patient ${patientId.toString().padStart(3, '0')} abnormality confirmed`, 'warning');
+          break;
+        case 'mark_reviewed':
+          newStatuses[patientId] = {
+            ...patient,
+            status: 'REVIEWED' // New status to indicate reviewed but still abnormal
+          };
+          addAlert(`✅ Patient ${patientId.toString().padStart(3, '0')} marked as reviewed`, 'success');
+          break;
+        default:
+          break;
+      }
+      
+      return newStatuses;
+    });
+  };
 
   // Load classification data from CSV
   const loadClassificationData = async () => {
@@ -339,8 +386,8 @@ function App() {
     });
     setPatientStatuses(initialStatuses);
     
-    // Start timer for classification every 5 windows (7.48 seconds)
-    const intervalTime = (187 * 5 / 125) * 1000; // 7.48 seconds in milliseconds
+    // Start timer for classification every 5 windows (14.96 seconds - 2x slower)
+    const intervalTime = (187 * 5 / 125) * 1000 * 2; // 14.96 seconds in milliseconds
     
     const timer = setInterval(() => {
       setCurrentWindowIndex(prev => {
@@ -367,7 +414,7 @@ function App() {
     }, intervalTime);
     
     setClassificationTimer(timer);
-    addAlert('🤖 AI classification started - monitoring every 7.48 seconds', 'info');
+    addAlert('🤖 AI classification started - monitoring every 14.96 seconds', 'info');
   };
 
   // Stop AI classification
@@ -578,7 +625,7 @@ function App() {
       
       // Animation parameters
       const sampleRate = 125; // Hz
-      const animationSpeed = 1; // Real-time speed
+      const animationSpeed = 1 / 2; // 2x slower than real-time speed
       const samplesPerSecond = sampleRate * animationSpeed;
       const pixelsPerSample = canvasWidth / 187; // 187 samples = 1.496 seconds
       
@@ -851,24 +898,28 @@ function App() {
                             </span>
                           </div>
                           <div className="text-sm text-gray-600">
-                            ID: {patient.id} • {patient.ecgData.length.toLocaleString()} samples
+                            ID: {patient.id}
                           </div>
-                          {status.status === 'NEEDS_CHECK' && (
+                          {(status.status === 'NEEDS_CHECK' || status.status === 'REVIEWED') && (
                             <div className="text-xs text-red-600 mt-1">
                               Detected at {status.detectedAt}
                             </div>
                           )}
                         </div>
-                        {status.status === 'NEEDS_CHECK' && (
+                        {(status.status === 'NEEDS_CHECK' || status.status === 'REVIEWED') && (
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
                               setSelectedAbnormalPatient(patientNum);
                               setShowAbnormalWindows(true);
                             }}
-                            className="px-3 py-1 bg-red-600 text-white text-xs rounded-full hover:bg-red-700 transition-colors"
+                            className={`px-3 py-1 text-white text-xs rounded-full transition-colors ${
+                              status.status === 'REVIEWED' 
+                                ? 'bg-orange-600 hover:bg-orange-700' 
+                                : 'bg-red-600 hover:bg-red-700'
+                            }`}
                           >
-                            Needs Check
+                            {status.status === 'REVIEWED' ? 'Reviewed' : 'Needs Check'}
                           </button>
                         )}
                       </div>
@@ -1024,7 +1075,7 @@ function App() {
                   <div className="bg-red-50 p-4 rounded-lg">
                     <h3 className="font-semibold text-red-800 mb-2">Detection Summary</h3>
                     <p className="text-sm text-red-700">
-                      Classification: <strong>{patientStatuses[selectedAbnormalPatient].classification}-Type Abnormal</strong>
+                      Classification: <strong>{CLASSIFICATION_NAMES[patientStatuses[selectedAbnormalPatient].classification] || `${patientStatuses[selectedAbnormalPatient].classification}-Type Abnormal`}</strong>
                     </p>
                     <p className="text-sm text-red-700">
                       Detected at: {patientStatuses[selectedAbnormalPatient].detectedAt}
@@ -1037,7 +1088,7 @@ function App() {
                   {patientStatuses[selectedAbnormalPatient].abnormalWindows.map((window, index) => (
                     <div key={index} className="border border-gray-200 rounded-lg p-4">
                       <h4 className="font-medium text-gray-900 mb-3">
-                        Window {window.windowIndex} - {window.classification}-Type Classification
+                        Window {window.windowIndex} - {CLASSIFICATION_NAMES[window.classification] || `${window.classification}-Type Classification`}
                       </h4>
                       <AbnormalECGWindow 
                         patientId={selectedAbnormalPatient}
@@ -1062,12 +1113,31 @@ function App() {
                 </button>
                 <button
                   onClick={() => {
-                    // Mark as reviewed (you can extend this functionality)
-                    addAlert(`✅ Patient ${selectedAbnormalPatient.toString().padStart(3, '0')} marked as reviewed`, 'success');
+                    handlePatientAction(selectedAbnormalPatient, 'classify_normal');
                     setShowAbnormalWindows(false);
                     setSelectedAbnormalPatient(null);
                   }}
                   className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
+                >
+                  Classify as Normal
+                </button>
+                <button
+                  onClick={() => {
+                    handlePatientAction(selectedAbnormalPatient, 'confirm');
+                    setShowAbnormalWindows(false);
+                    setSelectedAbnormalPatient(null);
+                  }}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                >
+                  Confirm
+                </button>
+                <button
+                  onClick={() => {
+                    handlePatientAction(selectedAbnormalPatient, 'mark_reviewed');
+                    setShowAbnormalWindows(false);
+                    setSelectedAbnormalPatient(null);
+                  }}
+                  className="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors"
                 >
                   Mark as Reviewed
                 </button>
