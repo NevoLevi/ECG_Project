@@ -1,97 +1,180 @@
 # ECG Hospital Monitoring System
 
-A real-time ECG monitoring system that uses machine learning to analyze ECG signals and detect abnormalities in a hospital setting.
+A real-time ECG monitoring system that uses machine learning to analyze ECG signals and detect abnormalities in a hospital setting. This system provides live ECG visualization, AI-powered classification, and a comprehensive patient management interface for medical professionals.
 
-## Project Structure
+![ECG Monitoring Dashboard](https://img.shields.io/badge/Status-Active-green)
+![React](https://img.shields.io/badge/React-18.3.1-blue)
+![TensorFlow.js](https://img.shields.io/badge/TensorFlow.js-Latest-orange)
+![License](https://img.shields.io/badge/License-MIT-yellow)
+
+## 🚀 Features
+
+### Core Functionality
+- **Real-time ECG Monitoring**: Continuous monitoring of 47 patients with live ECG waveform display
+- **AI-Powered Classification**: Automated detection of abnormal heartbeat patterns (V-type, S-type, F-type, Q-type)
+- **Intelligent Alert System**: Smart patient status management with automatic prioritization
+- **Doctor Review Interface**: Comprehensive patient review system with abnormal window visualization
+- **Persistent Data Storage**: Patient status and classification history tracking
+
+### Technical Features
+- **Live ECG Visualization**: Smooth scrolling waveforms showing 1.496-second windows (187 samples at 125Hz)
+- **Background AI Processing**: Non-intrusive classification every 7.48 seconds
+- **Smart Status Updates**: Patients flagged as abnormal only when 2+ abnormal classifications detected in 5-window span
+- **Dynamic Patient Sorting**: Abnormal patients automatically moved to top of list
+- **Responsive UI**: Modern, medical-grade interface built with React and Tailwind CSS
+
+## 📊 Project Structure
 
 ```
 ECG_Project/
-├── backend/                    # Flask API server
-│   └── server.py              # Main backend application
-├── frontend/                   # React frontend application
-│   ├── public/                # Static files
-│   │   └── models/            # TensorFlow.js model files
-│   ├── src/                   # React source code
-│   ├── package.json           # Frontend dependencies
-│   └── tailwind.config.js     # Tailwind CSS configuration
-├── data/                      # Data files
-│   ├── ecg_hospital_data_updated.csv  # Hospital ECG data (300 patients)
-│   ├── mitbih_train.csv       # Original training data
-│   ├── mitbih_test.csv        # Original test data
-│   └── patient_status.json    # Patient status persistence
-├── .venv/                     # Python virtual environment
-├── generate_ecg_hospital_data_updated.py  # Data generation script
-├── model_converter.py         # Model conversion utility
-├── requirements.txt           # Python dependencies
-└── README.md                  # This file
+├── frontend/                           # React application
+│   ├── public/
+│   │   ├── cat_net_classification_report_fixed.csv
+│   │   └── 47_Patients_Hospital.csv
+│   ├── src/
+│   │   ├── components/                 # React components
+│   │   ├── services/                   # API and model services
+│   │   └── App.js                      # Main application
+│   ├── package.json
+│   └── tailwind.config.js
+├── static_model_test/                  # Model testing and data
+│   ├── 47_Patients_Hospital.csv        # Patient ECG data (47 patients)
+│   ├── cat_net_classification_report_20250609_042242.csv
+│   ├── recreate_catnet.py              # Model recreation script
+│   └── static_cat_net_test.py          # Model testing
+├── backend/                            # Flask API (optional)
+│   └── server.py
+├── fix_classification_csv.py           # Data preprocessing utility
+├── find_trigger_patients.py            # Patient analysis tool
+├── verify_csv.py                       # Data verification script
+└── README.md
 ```
 
-## Features
+## 🛠️ Installation & Setup
 
-- **Real-time ECG Monitoring**: Monitors 300 patients simultaneously
-- **Live ECG Visualization**: Moving waveforms with 125Hz sampling rate
-- **ML-based Classification**: Background analysis every second using TensorFlow.js
-- **Patient Status Management**: Persistent tracking of patient conditions
-- **Doctor Workflow**: Review panel for medical staff with notes capability
-- **Hospital Dashboard**: Professional interface showing patient counts and statuses
+### Prerequisites
+- Node.js (v16 or higher)
+- npm or yarn
+- Python 3.8+ (for data processing scripts)
 
-## Setup Instructions
+### Quick Start
 
-### Backend Setup
-
-1. Navigate to the project root directory
-2. Activate the virtual environment:
+1. **Clone the repository**
    ```bash
-   .venv\Scripts\activate  # Windows
-   source .venv/bin/activate  # Linux/Mac
+   git clone https://github.com/NevoLevi/ECG_Project.git
+   cd ECG_Project
    ```
-3. Install Python dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-4. Start the Flask server:
-   ```bash
-   cd backend
-   python server.py
-   ```
-   The backend will run on `http://localhost:5000`
 
-### Frontend Setup
-
-1. Navigate to the frontend directory:
+2. **Install frontend dependencies**
    ```bash
    cd frontend
-   ```
-2. Install Node.js dependencies:
-   ```bash
    npm install
    ```
-3. Start the React development server:
+
+3. **Start the development server**
    ```bash
    npm start
    ```
-   The frontend will run on `http://localhost:3000`
 
-## Usage
+4. **Open your browser**
+   Navigate to `http://localhost:3000`
 
-1. Open your browser and navigate to `http://localhost:3000`
-2. The system will automatically load the hospital data and begin monitoring
-3. Click on any patient in the list to view their live ECG
-4. Use the doctor review panel to check patients and add notes
-5. Monitor the dashboard for real-time patient status updates
+### Usage Instructions
 
-## Data Format
+1. **Load AI Model**: Click "🧠 Load AI Model" to initialize the system
+2. **Load Hospital Data**: Click "📊 Load Hospital Data" and select the provided CSV file
+3. **Start Monitoring**: Click "🤖 Start AI Monitoring" to begin real-time analysis
+4. **Monitor Patients**: 
+   - Select any patient to view their live ECG
+   - Abnormal patients will automatically appear at the top with red highlighting
+   - Click "Needs Check" buttons to review abnormal patterns
+5. **Doctor Review**: View detailed abnormal ECG windows and mark patients as reviewed
 
-Each patient has 18,700 ECG values (100 sequences × 187 values each), representing 149.6 seconds of continuous ECG data at 125Hz sampling rate.
+## 📈 Data Format & Processing
 
-## Patient Categories
+### Patient Data
+- **47 Patients** with complete ECG recordings
+- **18,700 ECG samples per patient** (100 windows × 187 samples)
+- **125Hz sampling rate** providing high-resolution cardiac monitoring
+- **1.496-second display windows** for optimal visualization
 
-- **290 Normal Patients**: Only contain normal ECG sequences (classification 0)
-- **10 Mixed Patients**: Mostly normal with some abnormal sequences (classifications 1-3) randomly inserted within the first 50 sequences
+### Classification System
+- **Normal (N)**: Healthy heartbeat patterns
+- **S-Type**: Supraventricular premature beat
+- **V-Type**: Premature ventricular contraction  
+- **F-Type**: Fusion of ventricular and normal beat
+- **Q-Type**: Unclassifiable beat
 
-## Technology Stack
+### Smart Alert Logic
+- Patients start with "Normal" status
+- Status changes to "Needs Check" only when:
+  - ≥2 abnormal classifications detected in any 5-window span
+  - Majority abnormal class determines the patient's classification type
+- Once flagged, patients remain in "Needs Check" until doctor review
 
-- **Backend**: Flask, Python
-- **Frontend**: React, TailwindCSS, Recharts
-- **ML**: TensorFlow.js
-- **Data**: CSV files with patient status JSON persistence 
+## 🔧 Data Processing Scripts
+
+### `fix_classification_csv.py`
+Transforms the original classification CSV format:
+- Reorders heartbeat sequences numerically (1, 2, 3... instead of 1, 10, 100...)
+- Transposes data structure (patients as rows, heartbeats as columns)
+- Ensures proper data alignment for real-time processing
+
+### `find_trigger_patients.py`
+Analyzes classification data to identify patients that should trigger abnormal status:
+- Scans all 5-window groups for each patient
+- Identifies patients with ≥2 abnormal classifications in same window group
+- Provides detailed trigger analysis for system validation
+
+### `verify_csv.py`
+Data validation utility for ensuring correct CSV structure and content integrity.
+
+## 🎯 Key Technical Achievements
+
+### Real-time Performance
+- **Smooth ECG Animation**: Continuous waveform display without interruptions during AI processing
+- **Persistent Animation State**: ECG streams continue from correct positions across system updates
+- **Optimized Re-rendering**: Smart component updates minimize performance impact
+
+### AI Integration
+- **Background Processing**: Non-blocking classification every 7.48 seconds
+- **Smart Status Management**: Prevents false alarms with multi-window validation
+- **Pattern Recognition**: Accurate identification of cardiac abnormalities
+
+### User Experience
+- **Medical-grade Interface**: Professional design suitable for clinical environments
+- **Intelligent Prioritization**: Critical patients automatically highlighted
+- **Comprehensive Review Tools**: Detailed abnormal pattern visualization for medical assessment
+
+## 🏥 Clinical Workflow
+
+1. **Continuous Monitoring**: System automatically monitors all patients
+2. **Automatic Detection**: AI identifies abnormal patterns in background
+3. **Smart Alerting**: Only patients with confirmed abnormalities are flagged
+4. **Doctor Review**: Medical staff can examine specific abnormal windows
+5. **Status Management**: Patients can be marked as reviewed and managed accordingly
+
+## 🤝 Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+## 📄 License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## 🔬 Research Context
+
+This system was developed as part of a Data Science in Industry project, demonstrating the practical application of machine learning in healthcare monitoring systems. The project showcases:
+
+- Real-time data processing and visualization
+- Machine learning model deployment in production-like environments  
+- User interface design for critical healthcare applications
+- Integration of multiple technologies for comprehensive system solutions
+
+## 📞 Contact
+
+For questions or support, please open an issue on this repository.
+
+---
+
+*Built with ❤️ for advancing healthcare technology through data science* 

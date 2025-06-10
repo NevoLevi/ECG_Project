@@ -1,22 +1,113 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import modelService from './services/modelService';
+import monitoringService from './services/monitoringService';
 import './App.css';
 
-// ECG Classification labels
-const ECG_CLASSES = {
-  0: { name: 'Normal', color: '#10B981', severity: 'low' },
-  1: { name: 'S-Type Abnormal', color: '#F59E0B', severity: 'medium' },
-  2: { name: 'V-Type Abnormal', color: '#6366F1', severity: 'medium' },
-  3: { name: 'F-Type Abnormal', color: '#8B5CF6', severity: 'medium' },
-  4: { name: 'Q-Type Abnormal', color: '#EF4444', severity: 'high' }
-};
+// These constants are kept for potential future use
+// const ECG_CLASSES = {
+//   0: { name: 'Normal', color: '#10B981', severity: 'low' },
+//   1: { name: 'S-Type Abnormal', color: '#F59E0B', severity: 'medium' },
+//   2: { name: 'V-Type Abnormal', color: '#6366F1', severity: 'medium' },
+//   3: { name: 'F-Type Abnormal', color: '#8B5CF6', severity: 'medium' },
+//   4: { name: 'Q-Type Abnormal', color: '#EF4444', severity: 'high' }
+// };
 
-// Patient status types
-const STATUS_TYPES = {
-  NORMAL: { name: 'Normal', color: '#10B981', icon: '🟢' },
-  NEEDS_CHECK: { name: 'Needs Check', color: '#EF4444', icon: '🔴' },
-  UNDER_REVIEW: { name: 'Under Review', color: '#F59E0B', icon: '🟡' }
-};
+// const STATUS_TYPES = {
+//   NORMAL: { name: 'Normal', color: '#10B981', icon: '🟢' },
+//   NEEDS_CHECK: { name: 'Needs Check', color: '#EF4444', icon: '🔴' },
+//   UNDER_REVIEW: { name: 'Under Review', color: '#F59E0B', icon: '🟡' }
+// };
+
+// Component for displaying abnormal ECG windows
+const AbnormalECGWindow = React.memo(({ patientId, windowIndex, classification, getECGWindowData }) => {
+  const canvasRef = useRef(null);
+  
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    
+    const ctx = canvas.getContext('2d');
+    const canvasWidth = canvas.width;
+    const canvasHeight = canvas.height;
+    
+    // Get ECG data for this specific window
+    const ecgData = getECGWindowData(patientId, windowIndex);
+    
+    if (ecgData.length === 0) return;
+    
+    // Clear canvas
+    ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+    
+    // Draw grid
+    ctx.strokeStyle = '#E5E7EB';
+    ctx.lineWidth = 1;
+    
+    // Vertical grid lines
+    for (let x = 0; x <= canvasWidth; x += canvasWidth / 6) {
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, canvasHeight);
+      ctx.stroke();
+    }
+    
+    // Horizontal grid lines
+    for (let y = 0; y <= canvasHeight; y += canvasHeight / 4) {
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(canvasWidth, y);
+      ctx.stroke();
+    }
+    
+    // Normalize ECG data
+    const minVal = Math.min(...ecgData);
+    const maxVal = Math.max(...ecgData);
+    const range = maxVal - minVal;
+    
+    // Draw ECG wave
+    const classificationColors = {
+      'S': '#F59E0B', // Orange
+      'V': '#6366F1', // Indigo  
+      'F': '#8B5CF6', // Purple
+      'Q': '#EF4444', // Red
+      'N': '#10B981'  // Green
+    };
+    
+    ctx.strokeStyle = classificationColors[classification] || '#3B82F6';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    
+    const pixelsPerSample = canvasWidth / ecgData.length;
+    
+    ecgData.forEach((value, index) => {
+      const x = index * pixelsPerSample;
+      const normalizedValue = range > 0 ? (value - minVal) / range : 0.5;
+      const y = canvasHeight - (normalizedValue * canvasHeight * 0.8 + canvasHeight * 0.1);
+      
+      if (index === 0) {
+        ctx.moveTo(x, y);
+      } else {
+        ctx.lineTo(x, y);
+      }
+    });
+    
+    ctx.stroke();
+    
+    // Add classification label
+    ctx.fillStyle = classificationColors[classification] || '#3B82F6';
+    ctx.font = 'bold 14px sans-serif';
+    ctx.fillText(`${classification}-Type`, 10, 20);
+    
+  }, [patientId, windowIndex, classification, getECGWindowData]);
+  
+  return (
+    <canvas
+      ref={canvasRef}
+      width={600}
+      height={150}
+      className="w-full border border-gray-300 rounded bg-white"
+    />
+  );
+});
 
 function App() {
   // State management
@@ -24,49 +115,282 @@ function App() {
   const [hospitalData, setHospitalData] = useState(null);
   const [patients, setPatients] = useState([]);
   const [selectedPatient, setSelectedPatient] = useState(null);
-  const [isMonitoring, setIsMonitoring] = useState(false);
-  const [currentPositions, setCurrentPositions] = useState({});
-  const [patientPredictions, setPatientPredictions] = useState({});
-  const [patientStatuses, setPatientStatuses] = useState({});
   const [alerts, setAlerts] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [loadingStatus, setLoadingStatus] = useState('');
-  const [showDoctorModal, setShowDoctorModal] = useState(false);
-  const [doctorNotes, setDoctorNotes] = useState('');
-  const [patientToCheck, setPatientToCheck] = useState(null);
   const [showFileSelector, setShowFileSelector] = useState(false);
+  
+  const [modelInfo, setModelInfo] = useState(null);
+  
+  // Patient status management for AI classification
+  const [patientStatuses, setPatientStatuses] = useState({});
+  const [classificationData, setClassificationData] = useState(null);
+  const [classificationTimer, setClassificationTimer] = useState(null);
+  const [currentWindowIndex, setCurrentWindowIndex] = useState(0);
+  const [showAbnormalWindows, setShowAbnormalWindows] = useState(false);
+  const [selectedAbnormalPatient, setSelectedAbnormalPatient] = useState(null);
 
-  const intervalRefs = useRef({});
-  const positionRefs = useRef({});
+  const ecgPositionsRef = useRef({});
+
+  // Sort patients by status (needs check first) and ID, memoized
+  const sortedPatients = useMemo(() => {
+    // Create a shallow copy to avoid mutating state
+    const list = patients.slice();
+    list.sort((a, b) => {
+      const aNum = parseInt(a.id.split('_')[1]);
+      const bNum = parseInt(b.id.split('_')[1]);
+      const aStatus = patientStatuses[aNum]?.status || 'NORMAL';
+      const bStatus = patientStatuses[bNum]?.status || 'NORMAL';
+      // Abnormal first
+      if (aStatus === 'NEEDS_CHECK' && bStatus !== 'NEEDS_CHECK') return -1;
+      if (bStatus === 'NEEDS_CHECK' && aStatus !== 'NEEDS_CHECK') return 1;
+      // Then by numeric ID
+      return aNum - bNum;
+    });
+    return list;
+  }, [patients, patientStatuses]);
+
   const fileInputRef = useRef(null);
-  const intervalsRef = useRef({});
-
+  
+  // Cleanup classification timer on unmount
+  useEffect(() => {
+    return () => {
+      if (classificationTimer) {
+        clearInterval(classificationTimer);
+      }
+    };
+  }, [classificationTimer]);
+  
   // Add alert helper function
   const addAlert = useCallback((message, type = 'info') => {
     const alert = {
       id: Date.now(),
-      timestamp: new Date().toLocaleTimeString(),
       message,
-      type
+      type,
+      timestamp: new Date().toLocaleTimeString()
     };
     setAlerts(prev => [alert, ...prev.slice(0, 9)]); // Keep only last 10 alerts
   }, []);
 
-  // Load model
+  // Load classification data from CSV
+  const loadClassificationData = async () => {
+    try {
+      const response = await fetch('/cat_net_classification_report_fixed.csv');
+      if (!response.ok) {
+        throw new Error('Failed to load classification data');
+      }
+      const csvText = await response.text();
+      
+      // Parse classification CSV (new format: rows=patients, columns=heartbeats)
+      const lines = csvText.split('\n').filter(line => line.trim() !== '');
+      const classificationMap = {};
+      
+      lines.forEach((line, index) => {
+        if (index === 0) return; // Skip header
+        
+        const values = line.split(',');
+        const patientId = parseInt(values[0]); // First column is patient_id
+        const classifications = values.slice(1); // All classification results (heartbeats 1-100)
+        
+        if (!isNaN(patientId)) {
+          classificationMap[patientId] = classifications;
+          console.log(`Loaded Patient ${patientId}: ${classifications.length} classifications`);
+        }
+      });
+      
+      setClassificationData(classificationMap);
+      console.log('Classification data loaded:', Object.keys(classificationMap).length, 'patients');
+      console.log('Sample data for patient 1:', classificationMap[1]?.slice(0, 10));
+      addAlert(`✅ Classification data loaded successfully for ${Object.keys(classificationMap).length} patients`, 'success');
+      return classificationMap;
+    } catch (error) {
+      addAlert(`❌ Error loading classification data: ${error.message}`, 'error');
+      return null;
+    }
+  };
+
+  // Load model and connect to backend
   const handleLoadModel = async () => {
     try {
       setIsLoading(true);
-      setLoadingStatus('Loading AI model...');
+      setLoadingStatus('Connecting to monitoring server...');
       
-      await modelService.loadModel();
-      setModelLoaded(true);
-      addAlert('✅ AI Model loaded successfully', 'success');
+      // Check backend connection and model status
+      const modelInfo = await monitoringService.getModelInfo();
+      // Clear any previous patient statuses and alerts on server
+      await monitoringService.clearAllStatuses();
+      // Clear client-side cached states
+      setAlerts([]);
+      setModelInfo(modelInfo);
+      
+      if (modelInfo.model_loaded) {
+        setModelLoaded(true);
+        addAlert(`✅ Connected to monitoring server - ${modelInfo.model_name || 'CAT-Net Compatible'} loaded`, 'success');
+      } else {
+        throw new Error('Backend model not loaded');
+      }
+      
     } catch (error) {
-      addAlert(`❌ Error loading model: ${error.message}`, 'error');
+      console.error('Backend connection failed, trying frontend model...', error);
+      
+      // Fallback to frontend-only model
+      try {
+        setLoadingStatus('Loading frontend AI model...');
+        await modelService.loadModel();
+        setModelLoaded(true);
+        addAlert('✅ Frontend AI Model loaded (limited functionality)', 'success');
+      } catch (frontendError) {
+        addAlert(`❌ Error: ${frontendError.message}`, 'error');
+      }
     } finally {
       setIsLoading(false);
       setLoadingStatus('');
     }
+  };
+
+  // Process 5-window classification for a patient
+  const processPatientClassification = (patientId, windowClassifications, windowStartIndex) => {
+    if (!windowClassifications || windowClassifications.length !== 5) {
+      console.log(`Invalid window classifications for Patient ${patientId}:`, windowClassifications);
+      return;
+    }
+    
+    // Only log to console, not to system alerts (too verbose)
+    if (windowClassifications.some(cls => cls !== 'N' && cls !== '' && cls)) {
+      console.log(`📊 Patient ${patientId.toString().padStart(3, '0')} Window ${windowStartIndex}-${windowStartIndex+4}: [${windowClassifications.join(', ')}]`);
+    }
+    
+    // Count abnormal classifications
+    const abnormalClasses = windowClassifications.filter(cls => cls !== 'N' && cls !== '' && cls);
+    const abnormalCount = abnormalClasses.length;
+    
+    console.log(`Patient ${patientId}, Window ${windowStartIndex}-${windowStartIndex+4}:`, {
+      classifications: windowClassifications,
+      abnormalClasses,
+      abnormalCount
+    });
+    
+    // Check if patient needs status update (2+ abnormal in 5 windows)
+    if (abnormalCount >= 2) {
+      // Find majority abnormal class
+      const classCounts = {};
+      abnormalClasses.forEach(cls => {
+        classCounts[cls] = (classCounts[cls] || 0) + 1;
+      });
+      
+      const majorityClass = Object.entries(classCounts)
+        .sort(([,a], [,b]) => b - a)[0][0];
+      
+      console.log(`Patient ${patientId} triggering abnormal status:`, {
+        majorityClass,
+        classCounts,
+        windowClassifications
+      });
+      
+      // Update patient status (avoid triggering re-renders of unrelated components)
+      setPatientStatuses(prev => {
+        // Only update if status actually changed
+        const currentStatus = prev[patientId];
+        if (currentStatus?.status === 'NEEDS_CHECK' && currentStatus?.classification === majorityClass) {
+          return prev; // No change needed
+        }
+        
+        return {
+          ...prev,
+          [patientId]: {
+            status: 'NEEDS_CHECK',
+            classification: majorityClass,
+            abnormalWindows: windowClassifications.map((cls, idx) => ({
+              windowIndex: windowStartIndex + idx,
+              classification: cls,
+              isAbnormal: cls !== 'N' && cls !== '' && cls
+            })).filter(w => w.isAbnormal),
+            detectedAt: new Date().toLocaleTimeString(),
+            windowSpan: {
+              start: windowStartIndex,
+              end: windowStartIndex + 4
+            }
+          }
+        };
+      });
+      
+      addAlert(`🚨 Abnormal pattern detected in Patient ${patientId.toString().padStart(3, '0')}: ${majorityClass}-type (${abnormalCount}/5 abnormal)`, 'warning');
+    }
+  };
+
+  // Start AI classification simulation
+  const startClassification = () => {
+    if (!classificationData || !patients.length) {
+      addAlert('❌ Cannot start classification: missing data or patients', 'error');
+      return;
+    }
+    
+    // Initialize all patients as normal
+    const initialStatuses = {};
+    patients.forEach(patient => {
+      const patientNum = parseInt(patient.id.split('_')[1]);
+      initialStatuses[patientNum] = {
+        status: 'NORMAL',
+        classification: 'N',
+        abnormalWindows: [],
+        detectedAt: null,
+        windowSpan: null
+      };
+    });
+    setPatientStatuses(initialStatuses);
+    
+    // Start timer for classification every 5 windows (7.48 seconds)
+    const intervalTime = (187 * 5 / 125) * 1000; // 7.48 seconds in milliseconds
+    
+    const timer = setInterval(() => {
+      setCurrentWindowIndex(prev => {
+        const newIndex = prev + 5;
+        
+        console.log(`🔄 Processing window ${newIndex} for classification updates`);
+        
+        // Process each patient
+        patients.forEach(patient => {
+          const patientNum = parseInt(patient.id.split('_')[1]);
+          const patientClassifications = classificationData[patientNum];
+          
+          if (patientClassifications) {
+            // Get 5 consecutive windows starting from newIndex
+            if (newIndex + 4 < patientClassifications.length) {
+              const windowClassifications = patientClassifications.slice(newIndex, newIndex + 5);
+              processPatientClassification(patientNum, windowClassifications, newIndex);
+            }
+          }
+        });
+        
+        return newIndex;
+      });
+    }, intervalTime);
+    
+    setClassificationTimer(timer);
+    addAlert('🤖 AI classification started - monitoring every 7.48 seconds', 'info');
+  };
+
+  // Stop AI classification
+  const stopClassification = () => {
+    if (classificationTimer) {
+      clearInterval(classificationTimer);
+      setClassificationTimer(null);
+      setCurrentWindowIndex(0);
+      addAlert('⏹️ AI classification stopped', 'info');
+    }
+  };
+
+  // Get ECG data for specific window
+  const getECGWindowData = (patientId, windowIndex) => {
+    const patient = patients.find(p => p.id === `Patient_${patientId.toString().padStart(3, '0')}`);
+    if (!patient || !patient.ecgData) return [];
+    
+    const startIdx = windowIndex * 187;
+    const endIdx = startIdx + 187;
+    
+    if (endIdx > patient.ecgData.length) return [];
+    
+    return patient.ecgData.slice(startIdx, endIdx);
   };
 
   // Load hospital data
@@ -95,8 +419,6 @@ function App() {
           throw new Error('No data rows found in CSV file');
         }
         
-        setHospitalData(parsedData);
-        
         // Extract patients from the data
         const extractedPatients = extractPatients(parsedData);
         console.log(`Extracted ${extractedPatients.length} patients with ECG data`);
@@ -105,22 +427,19 @@ function App() {
           throw new Error('No patients extracted from data. Check data format.');
         }
         
-        setPatients(extractedPatients);
-        setSelectedPatient(extractedPatients[0]);
-        
-        // Initialize positions for each patient
-        const initialPositions = {};
-        extractedPatients.forEach(patient => {
-          initialPositions[patient.id] = 0;
-        });
-        setCurrentPositions(initialPositions);
-        positionRefs.current = initialPositions;
-        
-        // Load patient statuses from the backend
-        await fetchPatientStatuses();
+        // Deduplicate patients by ID
+        const uniquePatients = Array.from(
+          new Map(extractedPatients.map(p => [p.id, p])).values()
+        );
+        setHospitalData(parsedData);
+        setPatients(uniquePatients);
+        setSelectedPatient(uniquePatients[0]);
         
         addAlert(`✅ Hospital data loaded successfully. Found ${extractedPatients.length} patients.`, 'success');
         setShowFileSelector(false);
+        
+        // Also load classification data
+        await loadClassificationData();
         
       } catch (error) {
         console.error('Failed to load hospital data:', error);
@@ -131,74 +450,6 @@ function App() {
     } else {
       // Show file selector
       setShowFileSelector(true);
-    }
-  };
-
-  // Fetch patient statuses from backend
-  const fetchPatientStatuses = async () => {
-    try {
-      const response = await fetch('http://localhost:5000/api/patient-status');
-      if (response.ok) {
-        const statuses = await response.json();
-        setPatientStatuses(statuses);
-      } else {
-        console.warn('Could not load patient statuses from backend');
-      }
-    } catch (error) {
-      console.warn('Error fetching patient statuses:', error);
-    }
-  };
-
-  // Update patient status
-  const updatePatientStatus = async (patientId, status) => {
-    try {
-      setPatientStatuses(prev => ({
-        ...prev,
-        [patientId]: status
-      }));
-      
-      // Update status on backend
-      await fetch(`http://localhost:5000/api/patient-status/${patientId}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status })
-      });
-    } catch (error) {
-      console.error('Failed to update patient status:', error);
-    }
-  };
-
-  // Handle doctor check
-  const handleDoctorCheck = (patient) => {
-    setPatientToCheck(patient);
-    setDoctorNotes('');
-    setShowDoctorModal(true);
-  };
-
-  // Submit doctor check
-  const submitDoctorCheck = async (action) => {
-    try {
-      const status = action === 'clear' ? 'NORMAL' : 'UNDER_REVIEW';
-      
-      await fetch(`http://localhost:5000/api/patient-status/${patientToCheck.id}/check`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status, notes: doctorNotes })
-      });
-      
-      setPatientStatuses(prev => ({
-        ...prev,
-        [patientToCheck.id]: status
-      }));
-      
-      addAlert(`✅ Patient ${patientToCheck.name} ${action === 'clear' ? 'cleared to normal' : 'kept under review'}`, 'success');
-      
-    } catch (error) {
-      console.error('Failed to submit doctor check:', error);
-      addAlert(`❌ Error: ${error.message}`, 'error');
-    } finally {
-      setShowDoctorModal(false);
-      setPatientToCheck(null);
     }
   };
 
@@ -281,22 +532,14 @@ function App() {
       });
     });
     
-    // If no patients with ECG data were found, log the issue
-    if (patients.length === 0 && data.length > 0) {
-      console.error('No patients with ECG data could be extracted. Data format may be incorrect.');
-      console.log('First row sample:', data[0]);
-    } else {
-      console.log(`Successfully extracted ${patients.length} patients from data`);
-    }
-    
     return patients;
   };
 
-  // Extract ECG window for display (375 samples = 3 seconds)
+  // Extract ECG window for display (187 samples = 1.496 seconds)
   const extractECGDisplayWindow = (patient, position) => {
     if (!patient || !patient.ecgData || patient.ecgData.length === 0) return [];
     
-    const displayLength = 375; // 3 seconds * 125 Hz = 375 samples
+    const displayLength = 187; // 1.496 seconds * 125 Hz = 187 samples
     const startIdx = position;
     const endIdx = startIdx + displayLength;
     
@@ -304,7 +547,6 @@ function App() {
     if (endIdx > patient.ecgData.length) {
       // Loop back to beginning if we reach the end
       const remaining = endIdx - patient.ecgData.length;
-      console.log(`📊 Sliding window for ${patient.id}: wrapping around - taking ${patient.ecgData.length - startIdx} samples from end + ${remaining} from beginning`);
       return [
         ...patient.ecgData.slice(startIdx),
         ...patient.ecgData.slice(0, remaining)
@@ -312,280 +554,253 @@ function App() {
     }
     
     // Regular case - no wrap around needed
-    console.log(`📊 Sliding window for ${patient.id}: samples ${startIdx} to ${endIdx-1} (${displayLength} total)`);
     return patient.ecgData.slice(startIdx, endIdx);
   };
 
-  // Start monitoring
-  const handleStartMonitoring = async () => {
-    if (!modelLoaded || !patients || !Array.isArray(patients) || patients.length === 0) {
-      addAlert('❌ Please load model and hospital data first', 'error');
-      return;
-    }
-    setIsMonitoring(true);
-    addAlert('🚀 Starting patient monitoring...', 'info');
-  };
-
-  // Stop monitoring
-  const handleStopMonitoring = async () => {
-    setIsMonitoring(false);
-    addAlert('🛑 Stopping patient monitoring...', 'info');
-  };
-
   // ECG Wave Component with smooth sliding animation
-  const ECGWave = React.memo(({ patient, monitoring, prediction }) => {
+  const ECGWave = React.memo(({ patient, isMonitoring, ecgPositionsRef }) => {
     const canvasRef = useRef(null);
-    const animationRef = useRef(null);
-    const gridCanvasRef = useRef(null);
-
-    // Cache static grid background
+    const animationFrameRef = useRef(null);
+    const lastTimeRef = useRef(0);
+    
     useEffect(() => {
+      if (!patient || !patient.ecgData || patient.ecgData.length === 0) return;
+      
       const canvas = canvasRef.current;
       if (!canvas) return;
-      const { width, height } = canvas;
-      const gridCanvas = document.createElement('canvas');
-      gridCanvas.width = width;
-      gridCanvas.height = height;
-      const gctx = gridCanvas.getContext('2d');
-      gctx.fillStyle = '#FFFFFF'; gctx.fillRect(0, 0, width, height);
-      gctx.strokeStyle = '#F3F4F6'; gctx.lineWidth = 0.5;
-      for (let x = 0; x < width; x += 25) { gctx.beginPath(); gctx.moveTo(x, 0); gctx.lineTo(x, height); gctx.stroke(); }
-      for (let y = 0; y < height; y += 25) { gctx.beginPath(); gctx.moveTo(0, y); gctx.lineTo(width, y); gctx.stroke(); }
-      gridCanvasRef.current = gridCanvas;
-    }, []);
-
-    useEffect(() => {
-      if (!canvasRef.current || !patient || !patient.ecgData?.length) return;
-      const canvas = canvasRef.current;
+      
+      // Retrieve the last known position for this patient, or default to 0
+      let currentPosition = ecgPositionsRef.current[patient.id] || 0;
+      
       const ctx = canvas.getContext('2d');
-      const { width, height } = canvas;
-
-      // Draw one sliding window frame
+      const canvasWidth = canvas.width;
+      const canvasHeight = canvas.height;
+      
+      // Animation parameters
+      const sampleRate = 125; // Hz
+      const animationSpeed = 1; // Real-time speed
+      const samplesPerSecond = sampleRate * animationSpeed;
+      const pixelsPerSample = canvasWidth / 187; // 187 samples = 1.496 seconds
+      
       const drawFrame = (pos) => {
-        const ecgWindow = extractECGDisplayWindow(patient, pos);
-        const maxPoints = 200;
-        const factor = Math.max(1, Math.floor(ecgWindow.length / maxPoints));
-        const windowData = ecgWindow.filter((_, i) => i % factor === 0);
-
+        // Clear canvas
+        ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+        
         // Draw grid
-        if (gridCanvasRef.current) ctx.drawImage(gridCanvasRef.current, 0, 0);
-        else { ctx.fillStyle = '#FFFFFF'; ctx.fillRect(0, 0, width, height); }
-
-        // Draw amplitude axis labels and midline
-        ctx.save();
-        ctx.fillStyle = '#4B5563'; // gray labels
-        ctx.font = '12px sans-serif';
-        ctx.textAlign = 'left';
-        // 1.0 at top
-        ctx.textBaseline = 'top';
-        ctx.fillText('1.0', 4, 4);
-        // 0.5 in middle
-        ctx.textBaseline = 'middle';
-        ctx.fillText('0.5', 4, height / 2);
-        // 0.0 at bottom
-        ctx.textBaseline = 'bottom';
-        ctx.fillText('0.0', 4, height - 4);
-        ctx.restore();
-        // Draw horizontal dashed midline
-        ctx.save();
-        ctx.strokeStyle = '#6B7280';
+        ctx.strokeStyle = '#E5E7EB';
         ctx.lineWidth = 1;
-        ctx.setLineDash([4, 4]);
-        ctx.beginPath();
-        ctx.moveTo(0, height / 2);
-        ctx.lineTo(width, height / 2);
-        ctx.stroke();
-        ctx.restore();
-
-        // Draw ECG path (map amplitude 0–1 to full height)
-        const xStep = width / windowData.length;
-        const grad = ctx.createLinearGradient(0, 0, width, 0);
-        grad.addColorStop(0, '#93C5FD');
-        grad.addColorStop(0.7, '#3B82F6');
-        grad.addColorStop(1, '#1D4ED8');
-        ctx.strokeStyle = grad;
-        ctx.lineWidth = 2.5;
-        ctx.lineCap = 'round';
-        ctx.beginPath();
-        windowData.forEach((v, i) => {
-          const x = i * xStep;
-          // v=1 at top (y=0), v=0 at bottom (y=height)
-          const y = height * (1 - v);
-          if (i === 0) ctx.moveTo(x, y);
-          else {
-            const px = (i - 1) * xStep;
-            const py = height * (1 - windowData[i - 1]);
-            ctx.quadraticCurveTo(px, py, (px + x) / 2, (py + y) / 2);
-          }
-        });
-        ctx.stroke();
-
-        // Draw red striped "current moment" indicator at 75% of canvas
-        ctx.save();
-        ctx.strokeStyle = '#EF4444';
-        ctx.lineWidth = 1.5;
-        ctx.setLineDash([4, 4]);
-        const markerX = width * 0.75;
-        ctx.beginPath();
-        ctx.moveTo(markerX, 0);
-        ctx.lineTo(markerX, height);
-        ctx.stroke();
-        ctx.restore();
-      };
-
-      // Continuous scroll with wrap-around
-      let startTime = null;
-      const animate = (timestamp) => {
-        if (!startTime) startTime = timestamp;
-        const elapsed = timestamp - startTime;
-        const pos = Math.floor((elapsed / 1000) * 125);
-        const startIdx = pos % patient.ecgData.length;
-        drawFrame(startIdx);
-        if (monitoring) {
-          animationRef.current = requestAnimationFrame(animate);
+        
+        // Vertical grid lines (time markers)
+        for (let x = 0; x <= canvasWidth; x += canvasWidth / 6) {
+          ctx.beginPath();
+          ctx.moveTo(x, 0);
+          ctx.lineTo(x, canvasHeight);
+          ctx.stroke();
+        }
+        
+        // Horizontal grid lines (amplitude markers)
+        for (let y = 0; y <= canvasHeight; y += canvasHeight / 4) {
+          ctx.beginPath();
+          ctx.moveTo(0, y);
+          ctx.lineTo(canvasWidth, y);
+          ctx.stroke();
+        }
+        
+        // Get ECG data for current window
+        const ecgWindow = extractECGDisplayWindow(patient, Math.floor(pos));
+        
+        if (ecgWindow.length > 0) {
+          // Normalize ECG data to canvas height
+          const minVal = Math.min(...ecgWindow);
+          const maxVal = Math.max(...ecgWindow);
+          const range = maxVal - minVal;
+          
+          // Draw ECG wave
+          ctx.strokeStyle = '#3B82F6';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          
+          ecgWindow.forEach((value, index) => {
+            const x = index * pixelsPerSample;
+            const normalizedValue = range > 0 ? (value - minVal) / range : 0.5;
+            const y = canvasHeight - (normalizedValue * canvasHeight * 0.8 + canvasHeight * 0.1);
+            
+            if (index === 0) {
+              ctx.moveTo(x, y);
+            } else {
+              ctx.lineTo(x, y);
+            }
+          });
+          
+          ctx.stroke();
         }
       };
+      
+      const animate = (timestamp) => {
+        const deltaTime = timestamp - lastTimeRef.current;
+        lastTimeRef.current = timestamp;
+        
+        // Only update position if monitoring is active
+        if (deltaTime > 0 && isMonitoring) {
+          const samplesPerFrame = (samplesPerSecond * deltaTime) / 1000;
+          currentPosition += samplesPerFrame;
+          
+          // Wrap around when we reach the end of the data
+          if (currentPosition >= patient.ecgData.length) {
+            currentPosition = 0;
+          }
 
-      if (monitoring) {
-        startTime = null;
-        animationRef.current = requestAnimationFrame(animate);
-      } else {
-        // static initial frame
-        drawFrame(0);
-      }
-
-      return () => { if (animationRef.current) cancelAnimationFrame(animationRef.current); };
-    }, [patient, monitoring]);
-
+          // Persist the new position in the parent component's ref
+          ecgPositionsRef.current[patient.id] = currentPosition;
+        }
+        
+        drawFrame(currentPosition);
+        animationFrameRef.current = requestAnimationFrame(animate);
+      };
+      
+      lastTimeRef.current = performance.now();
+      animationFrameRef.current = requestAnimationFrame(animate);
+      
+      // Cleanup
+      return () => {
+        if (animationFrameRef.current) {
+          cancelAnimationFrame(animationFrameRef.current);
+        }
+      };
+    }, [patient, isMonitoring, ecgPositionsRef]);
+    
     return (
       <canvas
         ref={canvasRef}
-        width={600}
+        width={800}
         height={200}
-        className="border-2 border-gray-300 rounded-lg bg-white shadow-sm"
-        style={{ display: 'block' }}
+        className="w-full h-48 border border-gray-300 rounded bg-white"
+        style={{ imageRendering: 'pixelated' }}
       />
     );
   });
 
-  // Get status display for patient
-  const getPatientStatusDisplay = (patientId) => {
-    const status = patientStatuses[patientId] || 'NORMAL';
-    return STATUS_TYPES[status] || STATUS_TYPES.NORMAL;
-  };
-
   // Helper function to read file as text
   const readFileAsText = (file) => {
     return new Promise((resolve, reject) => {
-      if (!file) {
-        reject(new Error('No file provided'));
-        return;
-      }
-      
-      console.log(`Reading file: ${file.name}, size: ${file.size} bytes`);
-      
       const reader = new FileReader();
-      
-      reader.onload = (event) => {
-        const content = event.target.result;
-        console.log(`File read successful, content length: ${content.length}`);
-        resolve(content);
-      };
-      
-      reader.onerror = (error) => {
-        console.error('Error reading file:', error);
-        reject(new Error('Failed to read file'));
-      };
-      
+      reader.onload = (event) => resolve(event.target.result);
+      reader.onerror = (error) => reject(error);
       reader.readAsText(file);
     });
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
-      {/* Header */}
-      <header className="bg-white shadow-lg border-b">
-        <div className="max-w-7xl mx-auto px-4 py-6">
-          <h1 className="text-3xl font-bold text-gray-900 flex items-center">
-                          <span className="text-blue-600 mr-3">💓</span>
-            ECG Hospital Monitoring System
-          </h1>
-          <p className="text-gray-600 mt-2">Real-time cardiac monitoring with AI-powered analysis</p>
-        </div>
-      </header>
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex flex-col">
+      <div className="flex-1 p-6">
+        {/* Header */}
+        <div className="max-w-7xl mx-auto mb-8">
+          <div className="text-center mb-8">
+            <h1 className="text-4xl font-bold text-gray-900 mb-2">
+              🏥 ECG Hospital Monitoring System
+            </h1>
+            <p className="text-lg text-gray-600">
+              Real-time ECG monitoring and analysis for hospital patients
+            </p>
+          </div>
 
-      <div className="max-w-7xl mx-auto px-4 py-8">
-        {/* Control Panel */}
-        <div className="bg-white rounded-xl shadow-lg p-6 mb-8">
-          <h2 className="text-xl font-semibold text-gray-800 mb-4">Control Panel</h2>
-          
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-            {/* Model Loading */}
-            <button
-              onClick={handleLoadModel}
-              disabled={isLoading || modelLoaded}
-              className={`p-4 rounded-lg font-medium transition-all ${
-                modelLoaded
-                  ? 'bg-green-100 text-green-800 cursor-not-allowed'
-                  : 'bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50'
-              }`}
-            >
-              {modelLoaded ? '✅ Model Loaded' : '🤖 Load AI Model'}
-            </button>
+          {/* Control Panel */}
+          <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
+            <h2 className="text-xl font-semibold text-gray-800 mb-4">Control Panel</h2>
+            
+            <div className="space-y-4">
+              {/* Model Controls */}
+              <div className="space-y-3">
+                <button
+                  onClick={handleLoadModel}
+                  disabled={isLoading}
+                  className="w-full p-4 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 disabled:opacity-50 transition-all"
+                >
+                  🧠 Load AI Model
+                </button>
 
-            {/* Hospital Data Loading */}
-            <div className="relative">
-              <button
-                onClick={handleLoadHospitalData}
-                disabled={isLoading || !modelLoaded}
-                className={`p-4 rounded-lg font-medium transition-all w-full ${
-                  hospitalData
-                    ? 'bg-green-100 text-green-800'
-                    : 'bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-50'
-                }`}
-              >
-                {hospitalData ? '✅ Data Loaded' : '📊 Load Hospital Data'}
-              </button>
-              
-              {showFileSelector && (
-                <div className="absolute top-full left-0 right-0 mt-2 p-4 bg-white shadow-lg rounded-lg z-10">
-                  <h3 className="text-base font-medium mb-2">Select CSV file</h3>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept=".csv"
-                    onChange={handleLoadHospitalData}
-                    className="block w-full text-sm text-gray-500
-                      file:mr-4 file:py-2 file:px-4
-                      file:rounded-full file:border-0
-                      file:text-sm file:font-semibold
-                      file:bg-purple-50 file:text-purple-700
-                      hover:file:bg-purple-100"
-                  />
-                  <div className="mt-2 text-right">
-                    <button 
-                      onClick={() => setShowFileSelector(false)} 
-                      className="px-3 py-1 text-sm text-gray-600 hover:text-gray-800"
-                    >
-                      Cancel
-                    </button>
-                  </div>
+                {/* Hospital Data Controls */}
+                <div className="relative">
+                  <button
+                    onClick={handleLoadHospitalData}
+                    disabled={isLoading}
+                    className="w-full p-4 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700 disabled:opacity-50 transition-all"
+                  >
+                    📊 Load Hospital Data
+                  </button>
+                  
+                  {showFileSelector && (
+                    <div className="absolute top-full left-0 right-0 mt-2 p-4 bg-white border border-gray-300 rounded-lg shadow-lg z-10">
+                      <p className="text-sm text-gray-600 mb-2">Select a CSV file:</p>
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept=".csv"
+                        onChange={handleLoadHospitalData}
+                        className="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
+                      />
+                      <div className="mt-2 text-right">
+                        <button 
+                          onClick={() => setShowFileSelector(false)} 
+                          className="px-3 py-1 text-sm text-gray-600 hover:text-gray-800"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
-              )}
+
+                {/* AI Classification Controls */}
+                {hospitalData && patients.length > 0 && classificationData && (
+                  <div className="space-y-3">
+                    <div className="flex space-x-2">
+                      <button
+                        onClick={startClassification}
+                        disabled={!!classificationTimer}
+                        className="flex-1 p-3 bg-purple-600 text-white rounded-lg font-medium hover:bg-purple-700 disabled:opacity-50 transition-all"
+                      >
+                        🤖 Start AI Monitoring
+                      </button>
+                      <button
+                        onClick={stopClassification}
+                        disabled={!classificationTimer}
+                        className="flex-1 p-3 bg-red-600 text-white rounded-lg font-medium hover:bg-red-700 disabled:opacity-50 transition-all"
+                      >
+                        ⏹️ Stop AI Monitoring
+                      </button>
+                    </div>
+                    
+                    {classificationTimer && (
+                      <div className="text-center p-2 bg-purple-50 rounded-lg">
+                        <p className="text-sm text-purple-700">
+                          🔄 AI Monitoring Active - Window {currentWindowIndex}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
 
-            {/* Monitoring Control */}
-            <button
-              onClick={isMonitoring ? handleStopMonitoring : handleStartMonitoring}
-              disabled={isLoading || !modelLoaded || !hospitalData}
-              className={`p-4 rounded-lg font-medium transition-all ${
-                isMonitoring
-                  ? 'bg-red-600 text-white hover:bg-red-700'
-                  : 'bg-green-600 text-white hover:bg-green-700 disabled:opacity-50'
-              }`}
-            >
-              {isMonitoring ? '⏹️ Stop Monitoring' : '▶️ Start Monitoring'}
-            </button>
+            {/* System Status */}
+            <div className="flex flex-wrap gap-4 mt-4">
+              <span className={`px-3 py-1 rounded-full text-sm ${
+                modelLoaded ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'
+              }`}>
+                Model: {modelLoaded ? (modelInfo?.model_name || 'Ready') : 'Not Loaded'}
+              </span>
+              <span className={`px-3 py-1 rounded-full text-sm ${
+                hospitalData && patients.length > 0 ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'
+              }`}>
+                Data: {hospitalData && patients.length > 0 ? `${patients.length} Patients` : 'Not Loaded'}
+              </span>
+              <span className={`px-3 py-1 rounded-full text-sm ${
+                classificationData ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'
+              }`}>
+                AI Data: {classificationData ? 'Ready' : 'Not Loaded'}
+              </span>
+            </div>
           </div>
 
           {/* Loading Status */}
@@ -595,87 +810,68 @@ function App() {
               <span className="text-blue-800">{loadingStatus}</span>
             </div>
           )}
-
-          {/* System Status */}
-          <div className="flex flex-wrap gap-4 mt-4">
-            <span className={`px-3 py-1 rounded-full text-sm ${
-              modelLoaded ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'
-            }`}>
-              Model: {modelLoaded ? 'Ready' : 'Not Loaded'}
-            </span>
-            <span className={`px-3 py-1 rounded-full text-sm ${
-              hospitalData && patients.length > 0 ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'
-            }`}>
-              Data: {hospitalData && patients.length > 0 ? `${patients.length} Patients` : 'Not Loaded'}
-            </span>
-            <span className={`px-3 py-1 rounded-full text-sm ${
-              isMonitoring ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-600'
-            }`}>
-              Monitoring: {isMonitoring ? 'Active' : 'Inactive'}
-            </span>
-          </div>
         </div>
 
         {/* Main Content Area */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           {/* Patient List */}
           <div className="bg-white rounded-xl shadow-lg p-6 overflow-auto" style={{maxHeight: '800px'}}>
-            <h2 className="text-xl font-semibold text-gray-800 mb-4">Patients ({patients.length})</h2>
+            <h2 className="text-xl font-semibold text-gray-800 mb-4">Patients ({sortedPatients.length})</h2>
             
-            {patients.length > 0 ? (
+            {sortedPatients.length > 0 ? (
               <div className="space-y-3">
-                {patients.map(patient => {
-                  const prediction = patientPredictions[patient.id];
-                  const statusDisplay = getPatientStatusDisplay(patient.id);
+                {sortedPatients.map(patient => {
+                  const patientNum = parseInt(patient.id.split('_')[1]);
+                  const status = patientStatuses[patientNum] || { status: 'NORMAL', classification: 'N' };
                   
                   return (
-                    <div 
-                      key={patient.id} 
-                      className={`border rounded-lg p-3 cursor-pointer transition-all ${
-                        selectedPatient?.id === patient.id 
-                          ? 'border-blue-500 bg-blue-50' 
-                          : 'border-gray-200 hover:border-blue-300'
-                      }`}
+                    <div
+                      key={patient.id}
                       onClick={() => setSelectedPatient(patient)}
+                      className={`p-4 rounded-lg cursor-pointer transition-all border-2 ${
+                        selectedPatient?.id === patient.id
+                          ? 'border-blue-500 bg-blue-50 shadow-md'
+                          : status.status === 'NEEDS_CHECK'
+                          ? 'border-red-200 bg-red-50 hover:bg-red-100'
+                          : 'border-gray-200 bg-white hover:bg-gray-50'
+                      }`}
                     >
-                      <div className="flex justify-between items-start">
-                        <div>
-                          <h3 className="text-base font-medium text-gray-900 flex items-center">
-                            <span className="mr-2">{statusDisplay.icon}</span>
-                            {patient.name}
-                          </h3>
-                          <p className="text-sm text-gray-600">
-                            Room: {patient.roomNumber} | Age: {patient.age}
-                          </p>
-                        </div>
-                        
-                        {prediction && (
-                          <div 
-                            className="px-2 py-1 rounded text-xs font-medium"
-                            style={{ 
-                              backgroundColor: `${prediction.classInfo?.color || '#3B82F6'}20`,
-                              color: prediction.classInfo?.color || '#3B82F6' 
-                            }}
-                          >
-                            {prediction.classInfo?.name || 'Unknown'}
+                      <div className="flex items-center justify-between">
+                        <div className="flex-1">
+                          <div className="flex items-center space-x-2">
+                            <div className="font-semibold text-gray-900">
+                              {patient.name}
+                            </div>
+                            <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                              status.status === 'NEEDS_CHECK' 
+                                ? 'bg-red-100 text-red-800' 
+                                : 'bg-green-100 text-green-800'
+                            }`}>
+                              {status.status === 'NEEDS_CHECK' ? `${status.classification}-Type` : 'Normal'}
+                            </span>
                           </div>
-                        )}
-                      </div>
-                      
-                      {/* Actions */}
-                      {patientStatuses[patient.id] === 'NEEDS_CHECK' && (
-                        <div className="mt-2 flex justify-end">
+                          <div className="text-sm text-gray-600">
+                            ID: {patient.id} • {patient.ecgData.length.toLocaleString()} samples
+                          </div>
+                          {status.status === 'NEEDS_CHECK' && (
+                            <div className="text-xs text-red-600 mt-1">
+                              Detected at {status.detectedAt}
+                            </div>
+                          )}
+                        </div>
+                        {status.status === 'NEEDS_CHECK' && (
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
-                              handleDoctorCheck(patient);
+                              setSelectedAbnormalPatient(patientNum);
+                              setShowAbnormalWindows(true);
                             }}
-                            className="px-3 py-1 bg-blue-600 text-white text-xs rounded hover:bg-blue-700"
+                            className="px-3 py-1 bg-red-600 text-white text-xs rounded-full hover:bg-red-700 transition-colors"
                           >
-                            Check Patient
+                            Needs Check
                           </button>
-                        </div>
-                      )}
+                        )}
+                      </div>
                     </div>
                   );
                 })}
@@ -718,29 +914,26 @@ function App() {
                     </div>
                     
                     <div className="bg-gray-50 p-3 rounded-lg">
-                      <h3 className="text-sm font-medium text-gray-500">Status</h3>
-                      <p className="text-base font-medium" style={{ color: getPatientStatusDisplay(selectedPatient.id).color }}>
-                        {getPatientStatusDisplay(selectedPatient.id).name}
-                      </p>
-                      {patientPredictions[selectedPatient.id] && (
-                        <p className="text-sm" style={{ color: patientPredictions[selectedPatient.id].classInfo?.color || '#3B82F6' }}>
-                          {patientPredictions[selectedPatient.id].classInfo?.name || 'Unknown'} 
-                          ({(patientPredictions[selectedPatient.id].confidence * 100).toFixed(1)}%)
-                        </p>
-                      )}
+                      <h3 className="text-sm font-medium text-gray-500">Patient</h3>
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <h2 className="text-xl font-semibold text-gray-900">{selectedPatient.name}</h2>
+                        </div>
+                      </div>
                     </div>
                   </div>
                   
                   {/* ECG Wave */}                  
                   <div className="bg-gray-50 p-4 rounded-lg">                    
                     <h3 className="text-sm font-medium text-gray-700 mb-2">
-                      Live ECG (Sliding 3-second window)
+                      Live ECG (Sliding 1.496-second window)
                     </h3>
                     <div className="relative">
-                      <ECGWave                         
-                        patient={selectedPatient}                         
-                        monitoring={isMonitoring}                         
-                        prediction={patientPredictions[selectedPatient.id]}                      />                    
+                      <ECGWave 
+                        patient={selectedPatient} 
+                        isMonitoring={!!classificationTimer}
+                        ecgPositionsRef={ecgPositionsRef}
+                      />                    
                     </div>
                   </div>
                 </div>
@@ -754,86 +947,129 @@ function App() {
             
             {/* Alerts */}
             <div className="bg-white rounded-xl shadow-lg p-6 mt-6">
-              <h2 className="text-xl font-semibold text-gray-800 mb-4">System Alerts</h2>
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-xl font-semibold text-gray-800">System Alerts</h2>
+                {alerts.length > 0 && (
+                  <button
+                    onClick={() => setAlerts([])}
+                    className="px-3 py-1 text-sm bg-gray-100 text-gray-600 rounded hover:bg-gray-200"
+                  >
+                    Clear All
+                  </button>
+                )}
+              </div>
               
-              {alerts.length > 0 ? (
-                <div className="space-y-3">
-                  {alerts.map(alert => (
-                    <div 
-                      key={alert.id} 
-                      className={`p-3 rounded-lg border ${
-                        alert.type === 'error' 
-                          ? 'bg-red-50 border-red-200 text-red-800' 
-                          : alert.type === 'success'
-                          ? 'bg-green-50 border-green-200 text-green-800'
-                          : 'bg-blue-50 border-blue-200 text-blue-800'
-                      }`}
-                    >
-                      <div className="flex items-start">
-                        <div className="flex-grow">
-                          <p className="text-sm">{alert.message}</p>
-                          <p className="text-xs mt-1 opacity-70">{alert.timestamp}</p>
+              <div className="h-60 overflow-y-auto border border-gray-200 rounded-lg">
+                {alerts.length > 0 ? (
+                  <div className="p-3 space-y-3">
+                    {alerts.map(alert => (
+                      <div 
+                        key={alert.id} 
+                        className={`p-3 rounded-lg border ${
+                          alert.type === 'error' 
+                            ? 'bg-red-50 border-red-200 text-red-800' 
+                            : alert.type === 'success'
+                            ? 'bg-green-50 border-green-200 text-green-800'
+                            : alert.type === 'warning'
+                            ? 'bg-yellow-50 border-yellow-200 text-yellow-800'
+                            : 'bg-blue-50 border-blue-200 text-blue-800'
+                        }`}
+                      >
+                        <div className="flex items-start">
+                          <div className="flex-grow">
+                            <p className="text-sm font-medium">{alert.message}</p>
+                            <p className="text-xs mt-1 opacity-70">{alert.timestamp}</p>
+                          </div>
                         </div>
                       </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="h-full flex items-center justify-center text-gray-500">
+                    <div className="text-center">
+                      <div className="text-4xl mb-2">🔔</div>
+                      <p className="text-sm">No alerts yet</p>
+                      <p className="text-xs mt-1">System messages will appear here</p>
                     </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="text-center py-6 text-gray-500">
-                  <div className="text-4xl mb-2">🔔</div>
-                  <p>No alerts yet</p>
-                </div>
-              )}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>
       </div>
       
-      {/* Doctor Check Modal */}
-      {showDoctorModal && patientToCheck && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl p-6 max-w-lg w-full">
-            <h2 className="text-xl font-semibold text-gray-800 mb-4">
-              Doctor Check: {patientToCheck.name}
-            </h2>
-            
-            <div className="space-y-4">
-              <div>
-                <h3 className="text-sm font-medium text-gray-700 mb-1">Patient Status</h3>
-                <div className="p-3 rounded-lg bg-red-50 text-red-800 border border-red-200">
-                  Needs medical review
+      {/* Abnormal Windows Modal */}
+      {showAbnormalWindows && selectedAbnormalPatient && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-xl shadow-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="p-6">
+              <div className="flex justify-between items-center mb-6">
+                <h2 className="text-2xl font-bold text-gray-900">
+                  Abnormal ECG Windows - Patient {selectedAbnormalPatient.toString().padStart(3, '0')}
+                </h2>
+                <button
+                  onClick={() => {
+                    setShowAbnormalWindows(false);
+                    setSelectedAbnormalPatient(null);
+                  }}
+                  className="text-gray-500 hover:text-gray-700 text-2xl"
+                >
+                  ×
+                </button>
+              </div>
+              
+              {patientStatuses[selectedAbnormalPatient]?.abnormalWindows && (
+                <div className="space-y-6">
+                  <div className="bg-red-50 p-4 rounded-lg">
+                    <h3 className="font-semibold text-red-800 mb-2">Detection Summary</h3>
+                    <p className="text-sm text-red-700">
+                      Classification: <strong>{patientStatuses[selectedAbnormalPatient].classification}-Type Abnormal</strong>
+                    </p>
+                    <p className="text-sm text-red-700">
+                      Detected at: {patientStatuses[selectedAbnormalPatient].detectedAt}
+                    </p>
+                    <p className="text-sm text-red-700">
+                      Window span: {patientStatuses[selectedAbnormalPatient].windowSpan.start} - {patientStatuses[selectedAbnormalPatient].windowSpan.end}
+                    </p>
+                  </div>
+                  
+                  {patientStatuses[selectedAbnormalPatient].abnormalWindows.map((window, index) => (
+                    <div key={index} className="border border-gray-200 rounded-lg p-4">
+                      <h4 className="font-medium text-gray-900 mb-3">
+                        Window {window.windowIndex} - {window.classification}-Type Classification
+                      </h4>
+                      <AbnormalECGWindow 
+                        patientId={selectedAbnormalPatient}
+                        windowIndex={window.windowIndex}
+                        classification={window.classification}
+                        getECGWindowData={getECGWindowData}
+                      />
+                    </div>
+                  ))}
                 </div>
-              </div>
+              )}
               
-              <div>
-                <h3 className="text-sm font-medium text-gray-700 mb-1">Doctor Notes</h3>
-                <textarea
-                  className="w-full p-3 border border-gray-300 rounded-lg"
-                  rows={4}
-                  placeholder="Add your observations and notes here..."
-                  value={doctorNotes}
-                  onChange={(e) => setDoctorNotes(e.target.value)}
-                ></textarea>
-              </div>
-              
-              <div className="flex justify-end space-x-3 pt-4">
+              <div className="mt-6 flex justify-end space-x-3">
                 <button
-                  onClick={() => setShowDoctorModal(false)}
-                  className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50"
+                  onClick={() => {
+                    setShowAbnormalWindows(false);
+                    setSelectedAbnormalPatient(null);
+                  }}
+                  className="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors"
                 >
-                  Cancel
+                  Close
                 </button>
                 <button
-                  onClick={() => submitDoctorCheck('review')}
-                  className="px-4 py-2 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600"
+                  onClick={() => {
+                    // Mark as reviewed (you can extend this functionality)
+                    addAlert(`✅ Patient ${selectedAbnormalPatient.toString().padStart(3, '0')} marked as reviewed`, 'success');
+                    setShowAbnormalWindows(false);
+                    setSelectedAbnormalPatient(null);
+                  }}
+                  className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
                 >
-                  Keep Under Review
-                </button>
-                <button
-                  onClick={() => submitDoctorCheck('clear')}
-                  className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
-                >
-                  Clear to Normal
+                  Mark as Reviewed
                 </button>
               </div>
             </div>

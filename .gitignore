@@ -15,16 +15,27 @@ node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+package-lock.json
 
-# Data files (keep structure but ignore large data files)
-data/*.csv
-frontend/public/data/*.csv
-!data/patient_status.json
+# Large data files (exclude these but keep essential CSVs)
+data/
+ECG_Classification_Project/
+results/
+plots/
+static_model_test/cat_net_detailed_results_*.csv
+
+# Keep essential data files
+!static_model_test/47_Patients_Hospital.csv
+!static_model_test/cat_net_classification_report_*.csv
+!static_model_test/cat_net_summary_*.txt
+!frontend/public/47_Patients_Hospital.csv
+!frontend/public/cat_net_classification_report_fixed.csv
 
 # Model files
 *.h5
 *.pkl
 *.joblib
+models/
 
 # IDE
 .idea/
@@ -48,4 +59,13 @@ Thumbs.db
 
 # Build directories
 build/
-dist/ 
+dist/
+
+# Temporary files
+*.tmp
+*.bak
+*~
+
+# Testing
+coverage/
+.nyc_output/ 

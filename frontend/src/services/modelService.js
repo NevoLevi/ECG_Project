@@ -98,4 +98,5 @@ class ECGModelService {
   }
 }
 
-export default new ECGModelService(); 
+const modelService = new ECGModelService();
+export default modelService; 

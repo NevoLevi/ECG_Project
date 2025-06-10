@@ -1,0 +1,18 @@
+CAT-Net Classification Summary
+==================================================
+
+Test Date: 2025-06-09T04:22:42.229886
+Model: CAT-Net.h5
+Window Size: 187 samples
+Total Patients: 47
+Total Heartbeats: 100
+
+Overall Classification Distribution:
+------------------------------
+N (N): 4633 (98.6%)
+S (S): 23 (0.5%)
+V (V): 28 (0.6%)
+F (F): 12 (0.3%)
+Q (Q): 4 (0.1%)
+
+Total Classifications: 4700
