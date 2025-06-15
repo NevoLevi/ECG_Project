@@ -44,9 +44,6 @@ ECG_Project/
 │   └── static_cat_net_test.py          # Model testing
 ├── backend/                            # Flask API (optional)
 │   └── server.py
-├── fix_classification_csv.py           # Data preprocessing utility
-├── find_trigger_patients.py            # Patient analysis tool
-├── verify_csv.py                       # Data verification script
 └── README.md
 ```
 
@@ -112,22 +109,6 @@ ECG_Project/
   - Majority abnormal class determines the patient's classification type
 - Once flagged, patients remain in "Needs Check" until doctor review
 
-## 🔧 Data Processing Scripts
-
-### `fix_classification_csv.py`
-Transforms the original classification CSV format:
-- Reorders heartbeat sequences numerically (1, 2, 3... instead of 1, 10, 100...)
-- Transposes data structure (patients as rows, heartbeats as columns)
-- Ensures proper data alignment for real-time processing
-
-### `find_trigger_patients.py`
-Analyzes classification data to identify patients that should trigger abnormal status:
-- Scans all 5-window groups for each patient
-- Identifies patients with ≥2 abnormal classifications in same window group
-- Provides detailed trigger analysis for system validation
-
-### `verify_csv.py`
-Data validation utility for ensuring correct CSV structure and content integrity.
 
 ## 🎯 Key Technical Achievements
 
